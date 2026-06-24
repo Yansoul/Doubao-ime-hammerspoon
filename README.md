@@ -82,18 +82,23 @@ chmod +x ./install.sh
 1. 打开 Hammerspoon。
 2. 第一次运行时，为 Hammerspoon 授予 macOS 的“辅助功能”权限。
 3. 在 Hammerspoon 菜单栏图标中点击 `Reload Config`。
-4. 默认按住并松开右侧 `Command` 键。
-5. 脚本会自动切换到豆包输入法、触发语音输入，并在稍后恢复你原本的输入法。
+4. 在任意输入框里**按一下 `Fn`**（地球键）：自动切到豆包并开始语音输入，开始说话。
+5. 说完**再按一下 `Fn`**：豆包结束识别上屏，并自动切回你原本的输入法。
 
 ## 当前默认行为
 
 当前 [init.lua](./init.lua) 的逻辑是：
 
-- 监听右侧 `Command`
-- 记录当前输入法
-- 切换到豆包输入法
-- 模拟双击左侧 `Option`
-- 延迟恢复到之前的输入法
+- 监听 `Fn`（地球键）
+- 第一次按 `Fn`：记住当前输入法 → 同步切到豆包 → 把这枚真实的 `Fn` 原样放行给豆包启动语音
+- 第二次按 `Fn`：放行 `Fn` 让豆包结束语音 → 延迟一会儿（等识别结果上屏）后切回原输入法
+
+> 关键点：脚本**不“模拟” `Fn`**。`Fn`/地球键无法被可靠地模拟，豆包能分辨真假。
+> 这里利用的是「键盘监听早于输入法收到事件」——在你按下真实 `Fn` 的瞬间把输入法切到豆包，
+> 再原样放行这枚 `Fn`，它就直接落到刚切过去的豆包上、由豆包自己启动语音，所以稳定。
+>
+> 你这版豆包的语音触发是「按一次 `Fn`」。如果你的豆包是别的快捷键（比如双击某键），
+> 需要相应调整；可在豆包设置里把语音唤起方式设为「按一次 `Fn`」。
 
 ## 适合谁
 
@@ -105,26 +110,37 @@ chmod +x ./install.sh
 ## 注意事项
 
 - 只支持 macOS。
-- 需要你已经安装豆包输入法。
-- 需要 Hammerspoon 获得“辅助功能”权限，否则无法模拟按键。
+- 需要你已经安装豆包输入法，并把语音唤起方式设为「按一次 `Fn`」。
+- 需要 Hammerspoon 获得“辅助功能”权限，否则无法监听 `Fn`、切换输入法。
 - 安装脚本不会自动合并你原有的 Hammerspoon 配置，只会替换或保留现有 `~/.hammerspoon/init.lua`。
 - 如果你已有自己的 Hammerspoon 配置，建议先看清提示；脚本在覆盖前会自动备份。
 
 ## 输入法 ID
 
-当前配置里默认使用这个豆包输入法 ID：
+当前配置按**输入法 source id** 切换（而不是按显示名），因为豆包/微信都会注册两个同名的输入源，按名字切容易切到“裸键盘”那个、而不是带语音的拼音模式。默认使用：
 
 ```lua
-local TARGET_INPUT_SOURCE = "com.bytedance.inputmethod.doubaoime.pinyin"
+local TARGET_SOURCE_ID = "com.bytedance.inputmethod.doubaoime.pinyin"
 ```
 
-如果你机器上的输入法 ID 不一致，需要手动修改 [init.lua](./init.lua)，然后在 Hammerspoon 中重新加载配置。
+如果你机器上的输入法 ID 不一致，可以这样查到真实 ID（在 Hammerspoon 控制台执行）：
+
+```lua
+print(hs.keycodes.currentSourceID())   -- 先手动切到豆包，再执行这行看它的 id
+```
+
+把得到的 id 填回 [init.lua](./init.lua) 的 `DOUBAO_SOURCE_ID`，然后在 Hammerspoon 中重新加载配置。
+
+配置里还有两个可调项：
+
+- `FALLBACK_SOURCE_ID`：兜底输入法（默认微信输入法 `com.tencent.inputmethod.wetype.pinyin`），仅在开始语音时没读到当前输入法的极端情况下，结束后切回它。用别的主输入法就改这里。
+- `RESTORE_DELAY`：结束语音后多久切回原输入法（默认 `0.35` 秒）。如果偶尔发现识别结果还没上屏就被切走、丢字，把它调大一点。
 
 ## 可以继续自定义的地方
 
 你可以按自己的习惯继续改：
 
-- 触发按键
-- 双击 `Option` 的时间间隔
-- 恢复原输入法的延迟
+- 触发按键（默认 `Fn`，keycode 63）
+- 目标豆包输入法 `DOUBAO_SOURCE_ID`、兜底输入法 `FALLBACK_SOURCE_ID`
+- 结束语音后切回的延迟 `RESTORE_DELAY`
 - 与你现有 Hammerspoon 配置的整合方式
