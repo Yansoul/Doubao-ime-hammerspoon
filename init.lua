@@ -3,11 +3,11 @@
 -- 放到 ~/.hammerspoon/init.lua
 --
 -- 设计：脚本只负责【切输入法】，不碰语音触发。语音由豆包自己的 FN 触发。
---   按一下右 ⌘  -> 记住当前输入法，切到豆包
---   （此时你自己按 FN 唤起豆包语音、说话、再按 FN 结束）
---   再按一下右 ⌘ -> 切回原来的输入法
+--   右 ⌘ 只在【微信 ⇄ 豆包】之间来回切：
+--   按一下右 ⌘  -> 切到豆包（此时你自己按 FN 唤起豆包语音、说话、再按 FN 结束）
+--   再按一下右 ⌘ -> 一定切回微信输入法（不管切豆包前是什么输入法）
 --
---   完整操作：右⌘(切豆包) → FN(开说) → 说话 → FN(停) → 右⌘(切回)
+--   完整操作：右⌘(切豆包) → FN(开说) → 说话 → FN(停) → 右⌘(切回微信)
 --
 -- 为什么这么拆：豆包语音要求「按 FN 那一刻豆包已经是当前输入法」。
 --   如果让同一个键既切输入法又触发语音，切换和触发抢在一起，豆包认不出。
@@ -24,9 +24,9 @@ require("hs.ipc") -- 开启命令行 hs，方便调试/验证
 -- 豆包输入法（语音拼音模式）的 source id
 local DOUBAO_SOURCE_ID = "com.bytedance.inputmethod.doubaoime.pinyin"
 
--- 兜底输入法：万一开始语音时没读到当前输入法，结束后切回这个
--- 默认微信输入法；用别的主输入法的话改这里
-local FALLBACK_SOURCE_ID = "com.tencent.inputmethod.wetype.pinyin"
+-- 微信输入法：右 ⌘ 固定在它和豆包之间来回切，从豆包切回时一定回到这里。
+-- 用别的主输入法（搜狗/系统拼音等）就改这里。
+local WECHAT_SOURCE_ID = "com.tencent.inputmethod.wetype.pinyin"
 
 -- 守护式切回：豆包语音面板收尾时会把输入法“夺回”它自己，导致切不回原输入法。
 -- 切回后在这个窗口内持续盯着，被夺走就立刻再夺回，直到豆包放手或窗口结束。
@@ -100,7 +100,6 @@ end
 -- ============================================
 -- 状态
 -- ============================================
-local savedSourceID = nil -- 切到豆包前的原输入法，切回时用
 local triggerHeld = false -- 右 ⌘ 是否按住中，用来去重（按下/抬起会各来一次 flagsChanged）
 
 -- 记录脚本最近一次主动切换，用来在“输入法变化监听”里区分是脚本干的还是外部干的
@@ -179,7 +178,7 @@ end
 -- 把 source id 转成屏幕提示用的友好名字
 local function friendlyName(id)
     if id == DOUBAO_SOURCE_ID then return "豆包" end
-    if id == "com.tencent.inputmethod.wetype.pinyin" then return "微信" end
+    if id == WECHAT_SOURCE_ID then return "微信" end
     if type(id) == "string" and id:find("keylayout.ABC") then return "ABC（英文）" end
     if type(id) == "string" and id:find("wetype") then return "微信" end
     return id or "原输入法"
@@ -191,26 +190,17 @@ local function toast(msg, seconds)
     hs.alert.show(msg, seconds or 1)
 end
 
--- 切到豆包：记住当前输入法，切过去并校验。之后由用户自己按 FN 唤起豆包语音。
+-- 切到豆包：切过去并校验。之后由用户自己按 FN 唤起豆包语音。
 local function switchToDoubao()
     cancelRestoreGuard()
 
     local before = hs.keycodes.currentSourceID()
-    savedSourceID = before
-
-    -- 已经在豆包上，就别把豆包记成“原输入法”，否则切不回去
-    local guarded = false
-    if savedSourceID == nil or savedSourceID == DOUBAO_SOURCE_ID then
-        savedSourceID = FALLBACK_SOURCE_ID
-        guarded = true
-    end
 
     local hit, attempts, waitedMs = switchAndConfirm(DOUBAO_SOURCE_ID)
     toast(hit and "🎤 豆包 · 按 FN 说话" or "⚠️ 切豆包失败", hit and 1.2 or 1.5)
     flog(hit and "INFO" or "WARN",
-        "▶ 切到豆包 | %s | 原输入法=%s%s | 命中=%s（%d 次/扣%.0fms）| 现在按 FN 说话",
+        "▶ 切到豆包 | %s | 切换前=%s | 命中=%s（%d 次/扣%.0fms）| 现在按 FN 说话",
         frontCtx(), tostring(before),
-        guarded and "(读到空/豆包，改用 FALLBACK)" or "",
         tostring(hit), attempts, waitedMs)
 
     -- 延迟读回，确认没被外部改回去（持续监控用）
@@ -222,9 +212,10 @@ local function switchToDoubao()
     end)
 end
 
--- 切回原输入法（用户语音说完、按 FN 停掉之后再按右 ⌘）。
+-- 切回微信输入法（用户语音说完、按 FN 停掉之后再按右 ⌘）。
+-- 固定回到微信：右 ⌘ 只在微信 ⇄ 豆包之间切，不记忆“切豆包前是什么输入法”。
 local function switchBack()
-    local back = savedSourceID or FALLBACK_SOURCE_ID
+    local back = WECHAT_SOURCE_ID
     local hit, attempts, waitedMs = switchAndConfirm(back)
     toast("⌨️ 已切回 " .. friendlyName(back), 0.9)
     flog(hit and "INFO" or "WARN",
@@ -238,7 +229,7 @@ end
 local function onTriggerDown()
     local cur = hs.keycodes.currentSourceID()
     if cur == DOUBAO_SOURCE_ID then
-        flog("INFO", "右⌘↓ | 当前在豆包 ⇒ 切回原输入法 | %s", frontCtx())
+        flog("INFO", "右⌘↓ | 当前在豆包 ⇒ 切回微信 | %s", frontCtx())
         switchBack()
     else
         flog("INFO", "右⌘↓ | 当前=%s ⇒ 切到豆包 | %s", tostring(cur), frontCtx())
@@ -344,6 +335,6 @@ end)
 -- 启动横幅 + 一条会话起始标记，方便日志按 reload 分段
 -- ============================================
 hs.alert.show("右⌘ 输入法开关已启动（按右⌘切豆包/切回，语音用 FN）")
-flog("INFO", "==== 配置已加载 | 豆包=%s | 兜底=%s | 当前输入法=%s ====",
-    DOUBAO_SOURCE_ID, FALLBACK_SOURCE_ID,
+flog("INFO", "==== 配置已加载 | 豆包=%s | 微信=%s | 当前输入法=%s ====",
+    DOUBAO_SOURCE_ID, WECHAT_SOURCE_ID,
     tostring(hs.keycodes.currentSourceID()))
